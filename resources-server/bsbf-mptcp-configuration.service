@@ -1,0 +1,12 @@
+[Unit]
+Description=BSBF MPTCP configuration. Set subflow limit to 8 and disable blackhole timeout.
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/ip mptcp limits set subflows 8
+ExecStart=-/usr/sbin/sysctl net.mptcp.blackhole_timeout=0
+ExecStart=-/usr/sbin/sysctl net.mptcp.syn_retrans_before_tcp_fallback=128
+
+[Install]
+WantedBy=multi-user.target

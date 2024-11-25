@@ -1,0 +1,39 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2025-2026 Chester A. Unal <chester.a.unal@arinc9.com>
+
+if [ $# -ne 1 ]; then
+	echo "Usage: $0 <interface>"
+	exit 1
+fi
+
+IFACE="$1"
+
+# (Re-)add the HTB queuing discipline as root.
+tc qdisc del dev "$IFACE" root handle 1:0 2>/dev/null
+tc qdisc replace dev "$IFACE" root handle 1:0 htb
+
+# Set up rate-limiting for existing clients.
+for file in /usr/local/etc/xray/[0-9]*-*.json; do
+	[ -e "$file" ] || continue
+	FILENAME=$(basename "$file" .json)
+	CLIENT_ID=${FILENAME%%-*}
+	SPEED=${FILENAME##*-}
+	INBOUND_MARK=$CLIENT_ID
+	OUTBOUND_MARK=$((CLIENT_ID + 16384))
+
+	# Skip rate limiting if given speed is 0.
+	[ "$SPEED" -eq 0 ] && continue
+
+	# Convert to hex for tc.
+	INBOUND_MARK_HEX=$(printf '%x' $INBOUND_MARK)
+	OUTBOUND_MARK_HEX=$(printf '%x' $OUTBOUND_MARK)
+
+	# Add two classes for HTB, to rate limit download and upload to given limit.
+	tc class add dev "$IFACE" parent 1:0 classid 1:$INBOUND_MARK_HEX htb rate "$SPEED"mbit 2>/dev/null
+	tc class add dev "$IFACE" parent 1:0 classid 1:$OUTBOUND_MARK_HEX htb rate "$SPEED"mbit 2>/dev/null
+	# Limit download rate of client.
+	tc filter add dev "$IFACE" parent 1:0 handle 0x$INBOUND_MARK_HEX fw classid 1:$INBOUND_MARK_HEX
+	# Limit upload rate of client.
+	tc filter add dev "$IFACE" parent 1:0 handle 0x$OUTBOUND_MARK_HEX fw classid 1:$OUTBOUND_MARK_HEX
+done

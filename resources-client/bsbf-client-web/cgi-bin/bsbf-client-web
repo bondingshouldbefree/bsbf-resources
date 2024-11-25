@@ -1,0 +1,350 @@
+#!/bin/sh
+
+QS="&${QUERY_STRING}&"
+
+param() {
+	echo "$QS" | sed -n "s/.*&$1=\\([^&]*\\).*/\\1/p"
+}
+
+iface_validate() {
+	case "$1" in
+		*[!a-zA-Z0-9._-]* | "") return 1 ;;
+		*) return 0 ;;
+	esac
+}
+
+send_text() {
+	echo "Content-Type: text/plain; charset=utf-8"
+	echo "Cache-Control: no-store"
+	echo ""
+}
+
+# Comma-separated iface list → prints valid names only, space-separated (for "for" loops).
+ifaces_from_param() {
+	raw=$(param ifaces)
+	oIFS=$IFS
+	IFS=,
+	set -- $raw
+	IFS=$oIFS
+	out=""
+	for tok in "$@"; do
+		t=$(printf '%s' "$tok" | tr -d '\r\n\t ')
+		iface_validate "$t" || continue
+		out="$out $t"
+	done
+	printf '%s' "$out" | sed 's/^ //'
+}
+
+op=$(param op)
+
+case "$op" in
+stats)
+	send_text
+	iface=$(param iface)
+	if ! iface_validate "$iface"; then
+		printf 'ERR\tinvalid or missing iface\n'
+		exit 0
+	fi
+	tx=$(cat "/sys/class/net/$iface/statistics/tx_bytes" 2>/dev/null)
+	rx=$(cat "/sys/class/net/$iface/statistics/rx_bytes" 2>/dev/null)
+	if [ -z "$tx" ] || [ -z "$rx" ]; then
+		printf 'ERR\tcannot read stats for %s\n' "$iface"
+		exit 0
+	fi
+	printf 'OK\t%s\t%s\n' "$tx" "$rx"
+	exit 0
+	;;
+
+stats-batch)
+	send_text
+	list=$(ifaces_from_param)
+	if [ -z "$list" ]; then
+		exit 0
+	fi
+	for iface in $list; do
+		tx=$(cat "/sys/class/net/$iface/statistics/tx_bytes" 2>/dev/null)
+		rx=$(cat "/sys/class/net/$iface/statistics/rx_bytes" 2>/dev/null)
+		if [ -z "$tx" ] || [ -z "$rx" ]; then
+			printf '%s\tERR\tread\n' "$iface"
+		else
+			printf '%s\t%s\t%s\n' "$iface" "$tx" "$rx"
+		fi
+	done
+	exit 0
+	;;
+
+interfaces)
+	BSBF_CONFIG_DIR=/usr/local/etc/bsbf
+	[ ! -d "$BSBF_CONFIG_DIR" ] && BSBF_CONFIG_DIR=/etc/bsbf
+	BSBF_MPTCP_BACKUP="$BSBF_CONFIG_DIR/bsbf-mptcp-subflow-backup"
+	BSBF_NO_CONN=/run/bsbf-mptcp-no-connectivity
+	BSBF_MPTCP_NS=/run/bsbf-mptcp-not-supported
+	BSBF_MPTCP_SUP=/run/bsbf-mptcp-supported
+
+	send_text
+	printf '%s\n' '---routes---'
+	ip route show 2>/dev/null
+	printf '%s\n' '---no_conn---'
+	cat "$BSBF_NO_CONN" 2>/dev/null || true
+	printf '%s\n' '---mptcp_ns---'
+	cat "$BSBF_MPTCP_NS" 2>/dev/null || true
+	printf '%s\n' '---mptcp_sup---'
+	cat "$BSBF_MPTCP_SUP" 2>/dev/null || true
+	printf '%s\n' '---backup---'
+	cat "$BSBF_MPTCP_BACKUP" 2>/dev/null || true
+	exit 0
+	;;
+
+backup)
+	BSBF_CONFIG_DIR=/usr/local/etc/bsbf
+	[ ! -d "$BSBF_CONFIG_DIR" ] && BSBF_CONFIG_DIR=/etc/bsbf
+	BSBF_MPTCP_BACKUP="$BSBF_CONFIG_DIR/bsbf-mptcp-subflow-backup"
+	send_text
+	cat "$BSBF_MPTCP_BACKUP" 2>/dev/null || true
+	exit 0
+	;;
+
+bonding-status)
+	send_text
+	if ! command -v bsbf-bonding >/dev/null 2>&1; then
+		printf 'ERR\tbsbf-bonding not found in PATH\n'
+		exit 0
+	fi
+	out=$(bsbf-bonding --status 2>&1 | tr -d '\r')
+	if echo "$out" | grep -qi '^enabled$'; then
+		printf 'enabled\n'
+		exit 0
+	fi
+	if echo "$out" | grep -qi '^disabled$'; then
+		printf 'disabled\n'
+		exit 0
+	fi
+	if [ -z "$out" ]; then
+		out="bsbf-bonding --status failed"
+	fi
+	out=$(printf '%s' "$out" | tr '\n' ' ')
+	printf 'ERR\t%s\n' "$out"
+	exit 0
+	;;
+
+bonding-enable)
+	send_text
+	if ! command -v bsbf-bonding >/dev/null 2>&1; then
+		printf 'ERR\tbsbf-bonding not found in PATH\n'
+		exit 0
+	fi
+	out=$(bsbf-bonding --enable 2>&1 | tr -d '\r')
+	rc=$?
+	if [ "$rc" -ne 0 ]; then
+		if [ -z "$out" ]; then out="bsbf-bonding --enable exited $rc"; fi
+		out=$(printf '%s' "$out" | tr '\n' ' ')
+		printf 'ERR\t%s\n' "$out"
+		exit 0
+	fi
+	printf 'ok\n'
+	exit 0
+	;;
+
+bonding-disable)
+	send_text
+	if ! command -v bsbf-bonding >/dev/null 2>&1; then
+		printf 'ERR\tbsbf-bonding not found in PATH\n'
+		exit 0
+	fi
+	out=$(bsbf-bonding --disable 2>&1 | tr -d '\r')
+	rc=$?
+	if [ "$rc" -ne 0 ]; then
+		if [ -z "$out" ]; then out="bsbf-bonding --disable exited $rc"; fi
+		out=$(printf '%s' "$out" | tr '\n' ' ')
+		printf 'ERR\t%s\n' "$out"
+		exit 0
+	fi
+	printf 'ok\n'
+	exit 0
+	;;
+
+tc-class)
+	send_text
+	list=$(ifaces_from_param)
+	if [ -n "$list" ]; then
+		if ! command -v tc >/dev/null 2>&1; then
+			printf 'ERR\ttc not found in PATH\n'
+			exit 0
+		fi
+		for iface in $list; do
+			IFB="i$(echo "$iface" | tail -c 15)"
+			printf '%s\n' "---iface $iface---"
+			printf '%s\n' "__dl__"
+			tc class show dev "$IFB" 2>/dev/null || true
+			printf '%s\n' "__ul__"
+			tc class show dev "$iface" 2>/dev/null || true
+		done
+		exit 0
+	fi
+	iface=$(param iface)
+	if ! iface_validate "$iface"; then
+		printf 'ERR\tinvalid or missing iface / ifaces\n'
+		exit 0
+	fi
+	if ! command -v tc >/dev/null 2>&1; then
+		printf 'ERR\ttc not found in PATH\n'
+		exit 0
+	fi
+	IFB="i$(echo "$iface" | tail -c 15)"
+	printf '%s\n' "__dl__"
+	tc class show dev "$IFB" 2>/dev/null || true
+	printf '%s\n' "__ul__"
+	tc class show dev "$iface" 2>/dev/null || true
+	exit 0
+	;;
+
+priority)
+	send_text
+	iface=$(param iface)
+	dl=$(param dl)
+	ul=$(param ul)
+
+	if ! iface_validate "$iface"; then
+		printf 'ERR\tinvalid or missing iface\n'
+		exit 0
+	fi
+
+	for _n in dl ul; do
+		eval "_v=\$$_n"
+		if [ -z "$_v" ] || ! [ "$_v" -eq "$_v" ] 2>/dev/null || [ "$_v" -lt 0 ] 2>/dev/null; then
+			printf 'ERR\tinvalid %s (non-negative integer Mbps required)\n' "$_n"
+			exit 0
+		fi
+	done
+
+	if ! command -v bsbf-rate-limiting >/dev/null 2>&1; then
+		printf 'ERR\tbsbf-rate-limiting not found in PATH\n'
+		exit 0
+	fi
+
+	err=$(bsbf-rate-limiting "$iface" "$dl" "$ul" 2>&1)
+	status=$?
+	if [ "$status" -ne 0 ]; then
+		if [ -z "$err" ]; then
+			err="bsbf-rate-limiting exited $status (dl=$dl ul=$ul)"
+		fi
+		err=$(printf '%s' "$err" | tr '\n' ' ')
+		printf 'ERR\t%s\n' "$err"
+		exit 0
+	fi
+
+	printf 'ok\n'
+	exit 0
+	;;
+
+force-backup)
+	BSBF_CONFIG_DIR=/usr/local/etc/bsbf
+	[ ! -d "$BSBF_CONFIG_DIR" ] && BSBF_CONFIG_DIR=/etc/bsbf
+	BSBF_MPTCP_BACKUP="$BSBF_CONFIG_DIR/bsbf-mptcp-subflow-backup"
+
+	send_text
+
+	iface=$(param iface)
+	enabled=$(param enabled)
+	if ! iface_validate "$iface"; then
+		printf 'ERR\tinvalid or missing iface\n'
+		exit 0
+	fi
+
+	case "$enabled" in
+		1|true|yes) opv=1 ;;
+		0|false|no) opv=0 ;;
+		"")
+			printf 'ERR\tmissing enabled (use 0 or 1)\n'
+			exit 0
+			;;
+		*)
+			printf 'ERR\tinvalid enabled (use 0 or 1)\n'
+			exit 0
+			;;
+	esac
+
+	if ! mkdir -p "$BSBF_CONFIG_DIR" 2>/dev/null; then
+		printf 'ERR\tcannot create %s\n' "$BSBF_CONFIG_DIR"
+		exit 0
+	fi
+
+	infile="$BSBF_MPTCP_BACKUP"
+	[ -r "$infile" ] || infile=/dev/null
+
+	tmp=$(mktemp) || {
+		printf 'ERR\tcannot create temp file\n'
+		exit 0
+	}
+
+	awk -v op="$opv" -v f="$iface" '
+	function vline(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); gsub(/\r/, "", s); return s }
+	BEGIN { delete seen }
+	/^#/ { next }
+	{
+		line = vline($0)
+		if (line == "" || line !~ /^[a-zA-Z0-9._-]+$/) next
+		if (line == f) {
+			if (op == 0) next
+			if (op == 1) {
+				if (!seen[f]++) print line
+			}
+			next
+		}
+		print line
+	}
+	END {
+		if (op == 1 && !seen[f]) print f
+	}
+	' "$infile" > "$tmp" || {
+		rm -f "$tmp"
+		printf 'ERR\tcannot update state\n'
+		exit 0
+	}
+
+	if ! mv -f "$tmp" "$BSBF_MPTCP_BACKUP" 2>/dev/null; then
+		rm -f "$tmp"
+		printf 'ERR\tcannot write %s\n' "$BSBF_MPTCP_BACKUP"
+		exit 0
+	fi
+
+	printf 'ok\n'
+	exit 0
+	;;
+
+iface-ip)
+	send_text
+	iface=$(param iface)
+	if ! iface_validate "$iface"; then
+		printf 'ERR\tinvalid or missing iface\n'
+		exit 0
+	fi
+	if [ ! -d "/sys/class/net/$iface" ]; then
+		printf 'ERR\tinterface not found\n'
+		exit 0
+	fi
+	if ! command -v curl >/dev/null 2>&1; then
+		printf 'ERR\tcurl not found in PATH\n'
+		exit 0
+	fi
+	body=$(curl -sS --max-time 20 --interface "$iface" https://ipwho.is 2>/dev/null | tr -d '\r')
+	if [ -z "$body" ]; then
+		printf 'ERR\tno response from ipwho.is\n'
+		exit 0
+	fi
+	case "$body" in
+		\{*)
+			printf 'OK\n'
+			printf '%s\n' "$body"
+			;;
+		*) printf 'ERR\tinvalid response from ipwho.is\n' ;;
+	esac
+	exit 0
+	;;
+
+""|*)
+	send_text
+	printf 'ERR\tinvalid op\n'
+	exit 0
+	;;
+esac

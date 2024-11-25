@@ -1,0 +1,55 @@
+#!/usr/bin/node
+
+const https = require("https");
+const fs = require("fs");
+const { exec } = require("child_process");
+
+const PORT = 443;
+const LISTEN = "0.0.0.0";
+const ORIGIN = "https://fs.bondingshouldbefree.com";
+
+const sslOptions = {
+  key: fs.readFileSync("/etc/letsencrypt/live/api.bondingshouldbefree.com/privkey.pem"),
+  cert: fs.readFileSync("/etc/letsencrypt/live/api.bondingshouldbefree.com/fullchain.pem"),
+};
+
+let queue = Promise.resolve();
+
+function runSerialized(cmd) {
+  return new Promise((resolve, reject) => {
+    queue = queue.then(
+      () =>
+        new Promise((res) => {
+          exec(cmd, { encoding: "utf-8" }, (err, stdout, stderr) => {
+            if (err) {
+              reject(stderr || err.message);
+            } else {
+              resolve(stdout);
+            }
+            res();
+          });
+        })
+    );
+  });
+}
+
+https
+  .createServer(sslOptions, async (req, res) => {
+    if (req.url !== "/bsbf-add-client") {
+      res.writeHead(404, {"Access-Control-Allow-Origin": ORIGIN});
+      res.end();
+      return;
+    }
+
+    try {
+      const stdout = await runSerialized("bsbf-add-client 55 --overwrite");
+      res.writeHead(200, {"Access-Control-Allow-Origin": ORIGIN});
+      res.end(stdout);
+    } catch (err) {
+      res.writeHead(500, {"Access-Control-Allow-Origin": ORIGIN});
+      res.end(String(err));
+    }
+  })
+  .listen(PORT, LISTEN, () => {
+    console.log(`Listening on https://${LISTEN}:${PORT}/bsbf-add-client`);
+  });

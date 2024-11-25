@@ -1,0 +1,86 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Chester A. Unal <chester.a.unal@arinc9.com>
+
+usage() {
+	echo "Usage: $0 --status | --enable | --disable | --uninstall"
+	exit 1
+}
+
+[ $# -ne 1 ] && usage
+
+case "$1" in
+--status)
+	for service in bsbf-mptcp xray@bsbf-bonding lighttpd-bsbf-client-web; do
+		systemctl is-active --quiet "$service" || { echo "disabled"; exit 1; }
+	done
+	echo "enabled"
+	;;
+--enable)
+	# Source /usr/local/etc/bsbf/bsbf-bonding.conf. Exit if server_ipv4,
+	# server_port, or uuid is empty.
+	. /usr/local/etc/bsbf/bsbf-bonding.conf
+	if [ -z "$server_ipv4" ] || [ -z "$server_port" ] || [ -z "$uuid" ]; then
+		echo "server_ipv4, server_port, and uuid on /usr/local/etc/bsbf/bsbf-bonding.conf must not be empty."
+		exit 1
+	fi
+
+	# Configure xray.
+	tmp=$(mktemp) && chmod 644 "$tmp"
+	jq --arg SERVER "$server_ipv4" \
+	   --argjson PORT "$server_port" \
+	   --arg UUID "$uuid" '
+	    .outbounds[0].settings.address = $SERVER
+	  | .outbounds[0].settings.port = $PORT
+	  | .outbounds[0].settings.id = $UUID' \
+	  /usr/local/etc/xray/bsbf-bonding.json > "$tmp"
+	mv "$tmp" /usr/local/etc/xray/bsbf-bonding.json
+
+	# Flush the MPTCP endpoint table.
+	ip mp e f
+
+	# Enable and (re)start systemd services.
+	systemctl enable bsbf-mptcp xray@bsbf-bonding lighttpd-bsbf-client-web
+	systemctl restart bsbf-mptcp xray@bsbf-bonding lighttpd-bsbf-client-web
+	;;
+--disable)
+	# Disable and stop systemd services.
+	systemctl disable bsbf-mptcp xray@bsbf-bonding
+	systemctl stop bsbf-mptcp xray@bsbf-bonding
+
+	# Delete bsbf-mptcp files.
+	rm -f /run/bsbf-mptcp-*
+
+	# Flush the MPTCP endpoint table.
+	ip mp e f
+	;;
+--uninstall)
+	# Disable and stop systemd services.
+	systemctl disable bsbf-mptcp xray@bsbf-bonding lighttpd-bsbf-client-web
+	systemctl stop bsbf-mptcp xray@bsbf-bonding lighttpd-bsbf-client-web
+
+	# Delete bsbf-mptcp files.
+	rm -f /run/bsbf-mptcp-*
+
+	# Flush the MPTCP endpoint table.
+	ip mp e f
+
+	# Remove files.
+	rm -rf \
+		/usr/local/sbin/bsbf-bonding \
+		/usr/local/etc/bsbf/bsbf-bonding.conf \
+		/srv/bsbf-client-web \
+		/etc/lighttpd/bsbf-client-web.conf \
+		/usr/lib/systemd/system/lighttpd-bsbf-client-web.service \
+		/usr/local/sbin/bsbf-mptcp \
+		/usr/local/sbin/bsbf-mptcp-helper \
+		/usr/lib/systemd/system/bsbf-mptcp.service \
+		/usr/local/sbin/bsbf-rate-limiting \
+		/etc/nftables/bsbf_bonding.nft \
+		/etc/systemd/system/xray@.service.d/99-bsbf-bonding.conf \
+		/usr/local/etc/xray/bsbf-bonding.json
+	;;
+*)
+	usage
+	;;
+esac
