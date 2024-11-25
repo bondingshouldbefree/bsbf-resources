@@ -1,0 +1,79 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Chester A. Unal <chester.a.unal@arinc9.com>
+
+BSBF_CONFIG_DIR=/usr/local/etc/bsbf
+[ ! -d "$BSBF_CONFIG_DIR" ] && BSBF_CONFIG_DIR=/etc/bsbf
+BSBF_MPTCP_BACKUP="$BSBF_CONFIG_DIR/bsbf-mptcp-subflow-backup"
+
+echo "Content-Type: text/plain"
+echo ""
+
+case "$QUERY_STRING" in
+poll)
+	# Read bonding status.
+	echo "---bonding-status---"
+	bsbf-bonding --status
+
+	# Read interfaces.
+	routes=$(ip route show | grep "^default" | grep "metric")
+	interfaces=$(echo "$routes" | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}')
+	echo "---interfaces---"
+	echo "$interfaces"
+
+	# Read badges.
+	echo "---mptcp-no-connectivity---"
+	cat /run/bsbf-mptcp-no-connectivity 2>/dev/null
+	echo "---mptcp-not-supported---"
+	cat /run/bsbf-mptcp-not-supported 2>/dev/null
+	echo "---mptcp-supported---"
+	cat /run/bsbf-mptcp-supported 2>/dev/null
+
+	# Read download & upload limit.
+	echo "---dl-ul-limit---"
+	for IFACE in $interfaces; do
+		IFB="i$(echo "$IFACE" | tail -c 15)"
+		o=$(tc class show dev "$IFB" 2>/dev/null)
+		if [ -z "$o" ]; then echo 0; else echo "$o"; fi
+		o=$(tc class show dev "$IFACE")
+		if [ -z "$o" ]; then echo 0; else echo "$o"; fi
+	done
+
+	# Read backup status.
+	echo "---mptcp-subflow-backup---"
+	cat "$BSBF_MPTCP_BACKUP" 2>/dev/null
+
+	# Read download & upload throughput.
+	echo "---dl-ul-throughput---"
+	for IFACE in $interfaces; do
+		cat "/sys/class/net/$IFACE/statistics/rx_bytes"
+		cat "/sys/class/net/$IFACE/statistics/tx_bytes"
+	done
+	;;
+ip-info\&*)
+	IFACE=${QUERY_STRING#ip-info&}
+	curl -sS --interface "$IFACE" https://ipwho.is
+	;;
+enable|disable)
+	bsbf-bonding --"$QUERY_STRING"
+	;;
+limit\&*)
+	rest=${QUERY_STRING#limit&}
+	IFACE=${rest%%&*}
+	rest=${rest#*&}
+	DL=${rest%%&*}
+	UL=${rest#*&}
+	bsbf-rate-limiting "$IFACE" "$DL" "$UL"
+	;;
+backup\&*)
+	IFACE=${QUERY_STRING#backup&}
+	# Add the interface to the subflow-backup list.
+	grep -xq "$IFACE" "$BSBF_MPTCP_BACKUP" || echo "$IFACE" >> "$BSBF_MPTCP_BACKUP"
+	;;
+nobackup\&*)
+	IFACE=${QUERY_STRING#nobackup&}
+	# Remove the interface from the subflow-backup list.
+	grep -vx "$IFACE" "$BSBF_MPTCP_BACKUP" > "$BSBF_MPTCP_BACKUP".tmp
+	mv "$BSBF_MPTCP_BACKUP".tmp "$BSBF_MPTCP_BACKUP"
+	;;
+esac

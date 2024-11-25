@@ -1,0 +1,43 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Chester A. Unal <chester.a.unal@arinc9.com>
+
+INTERFACE="$1"
+DOWNLOAD="$2"
+UPLOAD="$3"
+
+if [ -z "$INTERFACE" ] || [ -z "$DOWNLOAD" ] || [ -z "$UPLOAD" ]; then
+	echo "Usage: $0 <interface> <DOWNLOAD_MBPS> <UPLOAD_MBPS>"
+	exit 1
+fi
+
+# Ensure IFB interface name is 15 characters max.
+IFB="i$(echo "$INTERFACE" | tail -c 15)"
+
+# (Re-)add the HTB queuing discipline as root. Default to classid 1:1.
+tc qdisc del dev "$INTERFACE" root handle 1:0 2>/dev/null
+tc qdisc replace dev "$INTERFACE" root handle 1:0 htb default 1
+
+# (Re-)add the IFB interface and set it up.
+ip link del "$IFB" 2>/dev/null
+ip link add "$IFB" type ifb
+ip link set dev "$IFB" up
+
+# (Re-)add the clsact queuing discipline, and add ingress filter.
+tc qdisc del dev "$INTERFACE" clsact 2>/dev/null
+tc qdisc replace dev "$INTERFACE" clsact
+tc filter add dev "$INTERFACE" ingress protocol ip u32 match u32 0 0 \
+	action mirred egress redirect dev "$IFB"
+
+# (Re-)add the HTB queuing discipline as root. Default to classid 1:1.
+tc qdisc del dev "$IFB" root handle 1:0 2>/dev/null
+tc qdisc replace dev "$IFB" root handle 1:0 htb default 1
+
+# Limit download rate of client.
+[ "$DOWNLOAD" -ne 0 ] && tc class add dev "$IFB" parent 1:0 classid 1:1 htb rate "$DOWNLOAD"mbit 2>/dev/null
+
+# Limit upload rate of client.
+[ "$UPLOAD" -ne 0 ] && tc class add dev "$INTERFACE" parent 1:0 classid 1:1 htb rate "$UPLOAD"mbit 2>/dev/null
+
+# Exit successfully also when unlimited rate is given.
+exit 0

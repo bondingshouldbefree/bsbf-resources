@@ -1,0 +1,44 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2025-2026 Chester A. Unal <chester.a.unal@arinc9.com>
+
+usage() {
+	echo "usage: $0 backup|nobackup|remove|add <interface>"
+	exit 1
+}
+
+[ $# -ne 2 ] && usage
+
+# Extract MPTCP endpoint ID(s) from interface.
+extract_id() {
+	ID=$(ip mp e | awk -v dev="$1" '$NF == dev {for(i=1;i<=NF;i++) if($i=="id") print $(i+1)}')
+	[ -z "$ID" ] && exit 1
+}
+
+case "$1" in
+	add)
+		IP=$(ip -4 -o a s dev "$2" | awk '{print $4}' | cut -d/ -f1)
+		[ -z "$IP" ] && exit 1
+
+		for IP in $IP; do
+			ip mp e a "$IP" subflow dev "$2"
+		done
+		;;
+	backup|nobackup)
+		extract_id "$2"
+
+		for ID in $ID; do
+			ip mp e c i "$ID" "$1"
+		done
+		;;
+	remove)
+		extract_id "$2"
+
+		for ID in $ID; do
+			ip mp e d i "$ID"
+		done
+		;;
+	*)
+		usage
+		;;
+esac

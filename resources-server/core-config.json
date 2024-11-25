@@ -1,0 +1,19 @@
+{
+  "log": {
+    "loglevel": "info"
+  },
+  "routing": {
+    "rules": [
+      {
+        "ip": ["geoip:private"],
+        "outboundTag": "blackhole"
+      }
+    ]
+  },
+  "outbounds": [
+    {
+      "protocol": "blackhole",
+      "tag": "blackhole"
+    }
+  ]
+}

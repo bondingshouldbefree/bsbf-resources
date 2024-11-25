@@ -1,0 +1,72 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2025-2026 Chester A. Unal <chester.a.unal@arinc9.com>
+
+if [ $# -lt 1 ]; then
+	echo "Usage: $0 <PORT_RANGE|PORT|UUID> [<PORT_RANGE|PORT|UUID> ...]"
+	exit 1
+fi
+
+# Use the interface from the preferred default route.
+IFACE=$(ip route show default | awk 'NR==1 {for (i=1;i<=NF;i++) if ($i=="dev") print $(i+1)}')
+
+UUID_REGEX='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+RANGE_REGEX='^[0-9]+-[0-9]+$'
+
+# Expand ranges into individual arguments.
+ARGS=""
+for INPUT in "$@"; do
+	if echo "$INPUT" | grep -qE "$RANGE_REGEX"; then
+		START=${INPUT%-*}
+		END=${INPUT#*-}
+		i=$START
+		while [ "$i" -le "$END" ]; do
+			ARGS="$ARGS $i"
+			i=$((i + 1))
+		done
+	else
+		ARGS="$ARGS $INPUT"
+	fi
+done
+
+for INPUT in $ARGS; do
+	# Remove client's xray configuration.
+	if echo "$INPUT" | grep -qE "$UUID_REGEX"; then
+		CLIENT_FILE=$(find /usr/local/etc/xray-bsbf-bonding -maxdepth 1 -type f -name "*-$INPUT-*.json" -print -quit)
+	else
+		CLIENT_FILE=$(find /usr/local/etc/xray-bsbf-bonding -maxdepth 1 -type f -name "$INPUT-*.json" -print -quit)
+	fi
+	[ -z "$CLIENT_FILE" ] && continue
+	rm "$CLIENT_FILE"
+
+	# Stop and disable client's xray service.
+	FILENAME=$(basename "$CLIENT_FILE" .json)
+	systemctl stop "xray-bsbf-bonding@$FILENAME"
+	systemctl disable "xray-bsbf-bonding@$FILENAME"
+
+	# Calculate client details.
+	CLIENT_ID=${FILENAME%%-*}
+	INBOUND_MARK=$CLIENT_ID
+	OUTBOUND_MARK=$((CLIENT_ID + 16384))
+
+	# Remove rate limiting for client. If there's no interface, assume
+	# there's nothing to remove, therefore, exit.
+	[ -n "$IFACE" ] || continue
+
+	# Skip rate limiting if given speed is 0.
+	SPEED=${FILENAME##*-}
+	[ "$SPEED" -eq 0 ] && continue
+
+	# Convert to hex for tc.
+	INBOUND_MARK_HEX=$(printf '%x' $INBOUND_MARK)
+	OUTBOUND_MARK_HEX=$(printf '%x' $OUTBOUND_MARK)
+
+	PRIO=$(tc filter show dev "$IFACE" | awk -v cid="$INBOUND_MARK_HEX" '$0 ~ "fw chain 0" && $0 ~ "classid 1:" cid {print $7}')
+	tc filter del dev "$IFACE" prio "$PRIO"
+
+	PRIO=$(tc filter show dev "$IFACE" | awk -v cid="$OUTBOUND_MARK_HEX" '$0 ~ "fw chain 0" && $0 ~ "classid 1:" cid {print $7}')
+	tc filter del dev "$IFACE" prio "$PRIO"
+
+	tc class del dev "$IFACE" parent 1:0 classid 1:$INBOUND_MARK_HEX
+	tc class del dev "$IFACE" parent 1:0 classid 1:$OUTBOUND_MARK_HEX
+done

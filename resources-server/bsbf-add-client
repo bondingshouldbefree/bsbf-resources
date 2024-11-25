@@ -1,0 +1,104 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2025-2026 Chester A. Unal <chester.a.unal@arinc9.com>
+
+if [ $# -lt 1 ] || { [ -n "$2" ] && [ "$2" != "--overwrite" ]; }; then
+	echo "Usage: $0 <MBPS> [--overwrite]"
+	exit 1
+fi
+
+SPEED="$1"
+OVERWRITE="$2"
+
+BASE_CLIENT_ID=16384
+CLIENT_LIMIT=16384
+
+# Generate a UUID.
+UUID=$(xray uuid)
+
+# Create xray configuration for client on server.
+CLIENT_ID=$BASE_CLIENT_ID
+while find /usr/local/etc/xray-bsbf-bonding -maxdepth 1 -type f -name "$CLIENT_ID-*.json" -print -quit | grep -q .; do
+	CLIENT_ID=$((CLIENT_ID + 1))
+done
+
+# When client limit is reached, exit if overwrite argument is not given. Use
+# greater than or equals to ensure the client limit excess is detected. Then,
+# empty the next slot and use that for the client.
+if [ $CLIENT_ID -ge $((BASE_CLIENT_ID + CLIENT_LIMIT)) ]; then
+	[ -z "$OVERWRITE" ] && exit 1
+	bsbf-remove-client $BASE_CLIENT_ID
+	CLIENT_ID=$BASE_CLIENT_ID
+fi
+# Empty the next slot if overwrite argument is given.
+[ -n "$OVERWRITE" ] && bsbf-remove-client $((CLIENT_ID + 1))
+
+# Add client to server.
+PORT=$CLIENT_ID
+INBOUND_MARK=$CLIENT_ID
+OUTBOUND_MARK=$((CLIENT_ID + 16384))
+
+cat > "/usr/local/etc/xray-bsbf-bonding/$PORT-$UUID-$SPEED.json" <<EOF
+{
+  "inbounds": [
+    {
+      "listen": "0.0.0.0",
+      "port": $PORT,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "$UUID"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "sockopt": {
+          "mark": $INBOUND_MARK,
+          "tcpMptcp": true
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "streamSettings": {
+        "sockopt": {
+          "mark": $OUTBOUND_MARK
+        }
+      }
+    }
+  ]
+}
+EOF
+
+# Start and enable xray for client.
+systemctl start xray-bsbf-bonding@$PORT-$UUID-$SPEED
+systemctl enable --quiet xray-bsbf-bonding@$PORT-$UUID-$SPEED
+
+# Return port and UUID.
+echo "$PORT" "$UUID"
+
+# Do rate limiting.
+# Use the interface from the preferred default route. If there's no interface,
+# rate limiting will be added by the 99-bsbf-rate-limiting if-up.d script when
+# an interface comes up, therefore, exit.
+IFACE=$(ip route show default | awk 'NR==1 {for (i=1;i<=NF;i++) if ($i=="dev") print $(i+1)}')
+[ -n "$IFACE" ] || exit
+
+# Skip rate limiting if given speed is 0.
+[ "$SPEED" -eq 0 ] && exit
+
+# Convert to hex for tc.
+INBOUND_MARK_HEX=$(printf '%x' $INBOUND_MARK)
+OUTBOUND_MARK_HEX=$(printf '%x' $OUTBOUND_MARK)
+
+# Add two classes for HTB, to rate limit download and upload to given limit.
+tc class add dev "$IFACE" parent 1:0 classid 1:$INBOUND_MARK_HEX htb rate "$SPEED"mbit 2>/dev/null
+tc class add dev "$IFACE" parent 1:0 classid 1:$OUTBOUND_MARK_HEX htb rate "$SPEED"mbit 2>/dev/null
+# Limit download rate of client.
+tc filter add dev "$IFACE" parent 1:0 handle 0x$INBOUND_MARK_HEX fw classid 1:$INBOUND_MARK_HEX
+# Limit upload rate of client.
+tc filter add dev "$IFACE" parent 1:0 handle 0x$OUTBOUND_MARK_HEX fw classid 1:$OUTBOUND_MARK_HEX
