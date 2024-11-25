@@ -1,0 +1,83 @@
+{
+  "log": {
+    "access": "none",
+    "loglevel": "error"
+  },
+  "dns": {
+    "tag": "dns-inbound",
+    "servers": [
+      "tcp://1.1.1.1"
+    ]
+  },
+  "inbounds": [
+    {
+      "listen": "127.0.0.1",
+      "port": 12345,
+      "protocol": "tunnel",
+      "settings": {
+        "network": "tcp,udp",
+        "followRedirect": true
+      },
+      "streamSettings": {
+        "sockopt": {
+          "tproxy": "tproxy"
+        }
+      }
+    }
+  ],
+  "routing": {
+    "rules": [
+      {
+        "inboundTag": [
+          "dns-inbound"
+        ],
+        "outboundTag": "vless"
+      },
+      {
+        "network": "tcp,udp",
+        "port": "53",
+        "outboundTag": "dns-outbound"
+      }
+    ]
+  },
+  "outbounds": [
+    {
+      "tag": "vless",
+      "protocol": "vless",
+      "settings": {
+        "address": "127.0.0.1",
+        "port": 1,
+        "id": "",
+        "encryption": "none"
+      },
+      "streamSettings": {
+        "sockopt": {
+          "dialerProxy": "freedom"
+        }
+      },
+      "mux": {
+        "enabled": true,
+        "concurrency": -1,
+        "xudpConcurrency": 1024,
+        "xudpProxyUDP443": "allow"
+      }
+    },
+    {
+      "tag": "freedom",
+      "protocol": "freedom",
+      "settings": {
+        "redirect": ""
+      },
+      "streamSettings": {
+        "sockopt": {
+          "mark": 2,
+          "tcpMptcp": true
+        }
+      }
+    },
+    {
+      "tag": "dns-outbound",
+      "protocol": "dns"
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+#!/usr/bin/node
+
+const https = require("https");
+const { exec, execSync } = require("child_process");
+
+const PORT = 16383;
+const LISTEN = "0.0.0.0";
+const ORIGIN = "https://fs.bondingshouldbefree.org";
+
+const HOST_IP_CMD =
+  "IFACE=$(ip route show default | awk 'NR==1 {for (i=1;i<=NF;i++) if ($i==\"dev\") print $(i+1)}'); " +
+  "ip -4 -o a s dev \"$IFACE\" | awk 'NR==1 {print $4}' | cut -d/ -f1";
+
+const pem = execSync("openssl req -x509 -newkey rsa:2048 -nodes -keyout - -days 3650 -subj /CN=bsbf 2>/dev/null");
+const certIndex = pem.indexOf("-----BEGIN CERTIFICATE-----");
+const sslOptions = {
+  key: pem.subarray(0, certIndex),
+  cert: pem.subarray(certIndex),
+};
+
+let queue = Promise.resolve();
+
+function runSerialized(cmd) {
+  return new Promise((resolve, reject) => {
+    queue = queue.then(
+      () =>
+        new Promise((res) => {
+          exec(cmd, { encoding: "utf-8" }, (err, stdout, stderr) => {
+            if (err) {
+              reject(stderr || err.message);
+            } else {
+              resolve(stdout);
+            }
+            res();
+          });
+        })
+    );
+  });
+}
+
+https
+  .createServer(sslOptions, async (req, res) => {
+    if (req.url !== "/bsbf-add-client") {
+      res.writeHead(404, {"Access-Control-Allow-Origin": ORIGIN});
+      res.end();
+      return;
+    }
+
+    try {
+      const hostIp = (await runSerialized(HOST_IP_CMD)).trim();
+      const stdout = await runSerialized("bsbf-add-client 0");
+      res.writeHead(200, {"Access-Control-Allow-Origin": ORIGIN});
+      res.end(`${hostIp} ${stdout}`);
+    } catch (err) {
+      res.writeHead(500, {"Access-Control-Allow-Origin": ORIGIN});
+      res.end(String(err));
+    }
+  })
+  .listen(PORT, LISTEN, () => {
+    console.log(`Listening on https://${LISTEN}:${PORT}/bsbf-add-client`);
+  });

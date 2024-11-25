@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BSBF Client Monitor</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+<main class="page-shell">
+<header class="page-header">
+  <h1>BSBF Client Monitor</h1>
+  <div class="page-controls">
+    <button type="button" class="btn-bonding" id="bonding-toggle" title="Loading bonding status..." disabled>
+      <span class="btn-bonding-label">Bonding: Loading...</span>
+      <span class="btn-bonding-spinner" aria-hidden="true"></span>
+    </button>
+    <button type="button" class="btn-theme" id="theme-toggle" aria-label="Toggle light or dark theme">
+      Theme: Dark
+    </button>
+  </div>
+</header>
+<div id="status">Discovering interfaces...</div>
+
+<div id="rate-limit-msg" class="rate-limit-msg" hidden></div>
+
+<div id="interfaces"></div>
+
+<div class="speedtest-section speedtest-collapsed" id="ost-section">
+  <div class="speedtest-header">
+    <h2>Speed Test</h2>
+    <button type="button" class="btn-rerun" id="ost-toggle" title="Open the speed test embed">
+      Show
+    </button>
+  </div>
+  <div id="ost-panel" class="speedtest-panel" hidden>
+    <div class="speedtest-aspect">
+      <iframe id="ost-iframe" title="OpenSpeedTest embed"></iframe>
+    </div>
+  </div>
+</div>
+
+</main>
+<script src="index.js" defer></script>
+</body>
+</html>
