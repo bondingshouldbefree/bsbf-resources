@@ -1,0 +1,35 @@
+#!/bin/sh
+# This script loads rate-limiting for existing clients on a specified interface.
+# Author: Chester A. Unal <chester.a.unal@arinc9.com>
+
+if [ $# -ne 1 ]; then
+	echo "Usage: $0 <interface>"
+	exit 1
+fi
+
+IFACE="$1"
+
+BASE_INBOUND_MARK=512
+BASE_OUTBOUND_MARK=1024
+
+# Replace the root qdisc for the internet interface to HTB.
+tc qdisc del dev "$IFACE" root handle 1:0 2>/dev/null ; \
+tc qdisc replace dev "$IFACE" root handle 1:0 htb
+# Set up rate-limiting for existing clients.
+for file in /etc/sing-box/config-client-*.json; do
+	[ -e "$file" ] || continue
+	CLIENT_ID=${file##*/config-client-}
+	CLIENT_ID=${CLIENT_ID%%-*}
+	SPEED=${file##*/config-client-*-}
+	SPEED=${SPEED%.json}
+	INBOUND_MARK=$((BASE_INBOUND_MARK + CLIENT_ID))
+	OUTBOUND_MARK=$((BASE_OUTBOUND_MARK + CLIENT_ID))
+
+	# Add two classes for HTB, to rate limit download and upload to given limit.
+	tc class add dev "$IFACE" parent 1:0 classid 1:$INBOUND_MARK htb rate "$SPEED"mbit
+	tc class add dev "$IFACE" parent 1:0 classid 1:$OUTBOUND_MARK htb rate "$SPEED"mbit
+	# Limit download rate of client.
+	tc filter add dev "$IFACE" parent 1:0 handle $INBOUND_MARK fw classid 1:$INBOUND_MARK
+	# Limit upload rate of client.
+	tc filter add dev "$IFACE" parent 1:0 handle $OUTBOUND_MARK fw classid 1:$OUTBOUND_MARK
+done

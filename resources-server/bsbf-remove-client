@@ -1,0 +1,40 @@
+#!/bin/sh
+# This script removes a given UUID of a client from server.
+# Author: Chester A. Unal <chester.a.unal@arinc9.com>
+
+if [ $# -ne 1 ] || [ -z "$1" ]; then
+	echo "Usage: $0 <UUID>"
+	exit 1
+fi
+
+UUID="$1"
+
+BASE_INBOUND_MARK=512
+BASE_OUTBOUND_MARK=1024
+
+# Remove client's sing-box configuration.
+CLIENT_FILE=$(sudo grep -l "$UUID" /etc/sing-box/config-client*.json)
+# If the given UUID of a client is not there, exit.
+[ -z "$CLIENT_FILE" ] && exit 1
+sudo rm $CLIENT_FILE
+
+# Stop and disable client's sing-box service.
+SERVICE=$(basename "$CLIENT_FILE" .json)
+sudo systemctl stop sing-box@$SERVICE
+sudo systemctl disable --quiet sing-box@$SERVICE
+
+# Calculate client details.
+CLIENT_ID=${CLIENT_FILE##*/config-client-}
+CLIENT_ID=${CLIENT_ID%%-*}
+INBOUND_MARK=$((BASE_INBOUND_MARK + CLIENT_ID))
+OUTBOUND_MARK=$((BASE_OUTBOUND_MARK + CLIENT_ID))
+
+# Remove rate limiting for client.
+PRIO=$(sudo tc filter show dev eth0 | awk -v cid="$INBOUND_MARK" '$0 ~ "fw chain 0" && $0 ~ "classid 1:" cid {print $7}')
+sudo tc filter del dev eth0 prio $PRIO
+
+PRIO=$(sudo tc filter show dev eth0 | awk -v cid="$OUTBOUND_MARK" '$0 ~ "fw chain 0" && $0 ~ "classid 1:" cid {print $7}')
+sudo tc filter del dev eth0 prio $PRIO
+
+sudo tc class del dev eth0 parent 1:0 classid 1:$INBOUND_MARK
+sudo tc class del dev eth0 parent 1:0 classid 1:$OUTBOUND_MARK

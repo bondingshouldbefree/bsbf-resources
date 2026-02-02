@@ -1,0 +1,45 @@
+#!/bin/sh
+
+if [ $# -lt 5 ]; then
+    echo "Usage: $0 <TARGET> <SUBTARGET> <PROFILE> <SPEED> <SERVER> <ICG_ARGS>"
+    exit 1
+fi
+
+TARGET="$1"
+SUBTARGET="$2"
+PROFILE="$3"
+# Any value in Mbps.
+SPEED="$4"
+# Server IP address.
+SERVER="$5"
+# Arguments for bsbf-client-openwrt-imagebuilder-config-generator.
+ICG_ARGS="$6"
+
+# Add client and register the UUID and port. Exit if bsbf-add-client fails.
+OUTPUT="$(sudo bsbf-add-client $SPEED)" || exit 1
+read UUID PORT <<EOF
+$OUTPUT
+EOF
+
+# Download imagebuilder if its directory doesn't exist.
+if [ ! -d "openwrt-imagebuilder-24.10.5-$TARGET-$SUBTARGET.Linux-x86_64" ]; then
+	curl -O "https://downloads.openwrt.org/releases/24.10.5/targets/$TARGET/$SUBTARGET/openwrt-imagebuilder-24.10.5-$TARGET-$SUBTARGET.Linux-x86_64.tar.zst"
+	tar xf "openwrt-imagebuilder-24.10.5-$TARGET-$SUBTARGET.Linux-x86_64.tar.zst"
+fi
+
+# Clone bsbf-client-openwrt-imagebuilder-config-generator.
+git clone https://github.com/bondingshouldbefree/bsbf-client-openwrt-imagebuilder-config-generator
+cd bsbf-client-openwrt-imagebuilder-config-generator
+
+# Generate images with BSBF bonding configuration.
+PACKAGES=$(./bsbf-client-openwrt-imagebuilder-config-generator.sh --server-ipv4 "$SERVER" --server-port "$PORT" --uuid "$UUID" $ICG_ARGS)
+install -D 99-bsbf-bonding ../openwrt-imagebuilder-24.10.5-$TARGET-$SUBTARGET.Linux-x86_64/files/etc/uci-defaults/99-bsbf-bonding
+cd ../openwrt-imagebuilder-24.10.5-$TARGET-$SUBTARGET.Linux-x86_64
+make image \
+PROFILE="$PROFILE" \
+PACKAGES="$PACKAGES" \
+FILES="files"
+
+# Remove bsbf-client-openwrt-imagebuilder-config-generator.
+cd ..
+rm -rf bsbf-client-openwrt-imagebuilder-config-generator

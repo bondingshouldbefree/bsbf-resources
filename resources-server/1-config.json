@@ -1,0 +1,22 @@
+{
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "ip_cidr": "127.0.0.53/32",
+        "port": 53,
+        "outbound": "direct"
+      },
+      {
+        "ip_is_private": true,
+        "action": "reject",
+        "method": "drop"
+      }
+    ]
+  }
+}
