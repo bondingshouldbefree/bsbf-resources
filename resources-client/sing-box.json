@@ -4,20 +4,20 @@
   },
   "inbounds": [
     {
-      "type": "tproxy",
-      "listen": "127.0.0.1",
-      "listen_port": 12345
+      "type": "tun",
+      "address": [ "172.18.0.1/30" ],
+      "auto_route": true,
+      "auto_redirect": true,
+      "auto_redirect_output_mark": "0x2"
     }
   ],
   "outbounds": [
     {
-      "type": "vmess",
+      "type": "vless",
       "server": "",
       "server_port": null,
       "uuid": "",
-      "security": "zero",
-      "tcp_multi_path": true,
-      "routing_mark": 2
+      "tcp_multi_path": true
     }
   ]
 }
