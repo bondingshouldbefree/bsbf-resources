@@ -1,0 +1,80 @@
+#!/bin/sh
+# This script requests server to add a client, then generates an OpenWrt image
+# with the BSBF bonding solution client.
+# Author: Chester A. Unal <chester.a.unal@arinc9.com>
+
+usage() {
+	echo "Usage: $0 --target <TARGET> --subtarget <SUBTARGET> --profile <PROFILE> --server-ipv4 <ADDR> --speed <MBPS> [IBCG_ARGS]"
+	exit 1
+}
+
+# Parse arguments.
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--target)
+		[ -z "$2" ] && usage
+		target="$2"
+		shift 2
+		;;
+	--subtarget)
+		[ -z "$2" ] && usage
+		subtarget="$2"
+		shift 2
+		;;
+	--profile)
+		[ -z "$2" ] && usage
+		profile="$2"
+		shift 2
+		;;
+	--server-ipv4)
+		[ -z "$2" ] && usage
+		server_ipv4="$2"
+		shift 2
+		;;
+	--speed)
+		[ -z "$2" ] && usage
+		server_ipv4="$2"
+		shift 2
+		;;
+	*)
+		IBCG_ARGS="${IBCG_ARGS:+$IBCG_ARGS }$1"
+		shift
+		;;
+	esac
+done
+
+# Show usage if target, subtarget, profile, server IPv4 address, and speed were
+# not provided.
+{ [ -z "$target" ] || [ -z "$subtarget" ] || [ -z "$profile" ] || [ -z "$server_ipv4" ] || [ -z "$speed" ]; } && usage
+
+# Request adding a client and register the UUID and port. Exit if
+# bsbf-add-client fails.
+OUTPUT="$(sudo bsbf-add-client $SPEED)" || exit 1
+read UUID PORT <<EOF
+$OUTPUT
+EOF
+
+# Download imagebuilder if its directory doesn't exist.
+if [ ! -d "openwrt-imagebuilder-24.10.5-$TARGET-$SUBTARGET.Linux-x86_64" ]; then
+	curl -O "https://downloads.openwrt.org/releases/24.10.5/targets/$TARGET/$SUBTARGET/openwrt-imagebuilder-24.10.5-$TARGET-$SUBTARGET.Linux-x86_64.tar.zst"
+	tar xf "openwrt-imagebuilder-24.10.5-$TARGET-$SUBTARGET.Linux-x86_64.tar.zst"
+fi
+
+# Clone bsbf-client-openwrt-imagebuilder-config-generator.
+git clone https://github.com/bondingshouldbefree/bsbf-client-openwrt-imagebuilder-config-generator
+cd bsbf-client-openwrt-imagebuilder-config-generator
+
+# Generate BSBF bonding configuration and install it.
+PACKAGES=$(./bsbf-client-openwrt-imagebuilder-config-generator.sh --server-ipv4 "$SERVER" --server-port "$PORT" --uuid "$UUID" $ICG_ARGS)
+install -D 99-bsbf-bonding ../openwrt-imagebuilder-24.10.5-$TARGET-$SUBTARGET.Linux-x86_64/files/etc/uci-defaults/99-bsbf-bonding
+
+# Remove bsbf-client-openwrt-imagebuilder-config-generator.
+cd ..
+rm -rf bsbf-client-openwrt-imagebuilder-config-generator
+
+# Generate an image.
+cd openwrt-imagebuilder-24.10.5-$TARGET-$SUBTARGET.Linux-x86_64
+make image \
+PROFILE="$PROFILE" \
+PACKAGES="$PACKAGES" \
+FILES="files"

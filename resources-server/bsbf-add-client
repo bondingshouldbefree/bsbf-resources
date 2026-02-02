@@ -1,0 +1,86 @@
+#!/bin/sh
+# This script adds a client to server.
+# Author: Chester A. Unal <chester.a.unal@arinc9.com>
+
+if [ $# -ne 1 ]; then
+	echo "Usage: $0 <speed>"
+	exit 1
+fi
+
+SPEED="$1"
+
+CLIENT_LIMIT=512
+BASE_PORT=32768
+BASE_INBOUND_MARK=512
+BASE_OUTBOUND_MARK=1024
+
+# Generate a UUID.
+UUID=$(sing-box generate uuid)
+
+# Create sing-box configuration for client on server.
+CLIENT_ID=0
+while find /etc/sing-box -maxdepth 1 -type f -name "config-client-$CLIENT_ID-*.json" -print -quit | grep -q .; do
+	CLIENT_ID=$((CLIENT_ID + 1))
+done
+
+# Exit if client limit is reached.
+[ $CLIENT_ID -ge $CLIENT_LIMIT ] && exit 1
+
+PORT=$((BASE_PORT + CLIENT_ID))
+
+# Add client to server.
+INBOUND_TAG="inbound-$CLIENT_ID"
+INBOUND_MARK=$((BASE_INBOUND_MARK + CLIENT_ID))
+OUTBOUND_TAG="outbound-$CLIENT_ID"
+OUTBOUND_MARK=$((BASE_OUTBOUND_MARK + CLIENT_ID))
+
+sudo tee "/etc/sing-box/config-client-$CLIENT_ID-$SPEED.json" > /dev/null <<EOF
+{
+  "inbounds": [
+    {
+      "type": "vless",
+      "tag": "$INBOUND_TAG",
+      "listen": "0.0.0.0",
+      "listen_port": $PORT,
+      "routing_mark": $INBOUND_MARK,
+      "tcp_multi_path": true,
+      "users": [
+        {
+          "uuid": "$UUID"
+        }
+      ]
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "$OUTBOUND_TAG",
+      "routing_mark": $OUTBOUND_MARK
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "inbound": "$INBOUND_TAG",
+        "outbound": "$OUTBOUND_TAG"
+      }
+    ]
+  }
+}
+EOF
+
+# Start and enable sing-box for client.
+sudo systemctl start sing-box@config-client-$CLIENT_ID-$SPEED
+sudo systemctl enable --quiet sing-box@config-client-$CLIENT_ID-$SPEED
+
+# Do rate limiting.
+# Add two classes for HTB, to rate limit download and upload to given limit.
+sudo tc class add dev eth0 parent 1:0 classid 1:$INBOUND_MARK htb rate "$SPEED"mbit 2>/dev/null
+sudo tc class add dev eth0 parent 1:0 classid 1:$OUTBOUND_MARK htb rate "$SPEED"mbit 2>/dev/null
+# Limit download rate of client.
+sudo tc filter add dev eth0 parent 1:0 handle $INBOUND_MARK fw classid 1:$INBOUND_MARK
+# Limit upload rate of client.
+sudo tc filter add dev eth0 parent 1:0 handle $OUTBOUND_MARK fw classid 1:$OUTBOUND_MARK
+
+# Return UUID and port.
+echo "$UUID" "$PORT"
