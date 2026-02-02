@@ -2,6 +2,16 @@
   "log": {
     "level": "error"
   },
+  "dns": {
+    "servers": [
+      {
+        "type": "tcp",
+        "server": "127.0.0.53",
+        "server_port": 53,
+        "detour": "vless"
+      }
+    ]
+  },
   "inbounds": [
     {
       "type": "tun",
@@ -14,10 +24,22 @@
   "outbounds": [
     {
       "type": "vless",
+      "tag": "vless",
       "server": "",
       "server_port": null,
       "uuid": "",
       "tcp_multi_path": true
     }
-  ]
+  ],
+  "route": {
+    "rules": [
+      {
+        "action": "sniff"
+      },
+      {
+        "protocol": "dns",
+        "action": "hijack-dns"
+      }
+    ]
+  }
 }
