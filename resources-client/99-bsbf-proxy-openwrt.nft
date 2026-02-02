@@ -1,0 +1,31 @@
+# Make packets from client destined to an IPv4 address that is local to the
+# system bypass the proxy. This includes unicast DHCP Request packets with the
+# IPv4 daddr not being a private IPv4 address, for which we had to put the 'udp
+# dport 67' rule to have it bypass the proxy. This rule ensures that all traffic
+# from client that is destined to the router bypasses the proxy. This covers the
+# case that if the LAN IP address of the router is not a private IPv4 address,
+# it wouldn't bypass the proxy.
+#
+# This makes it so that all packets that are supposed to be routed will be
+# tproxied, except packets with a private IPv4 address as daddr.
+#
+# Author: Chester A. Unal <chester.a.unal@arinc9.com>
+
+set proxy_byp4 {
+	typeof ip daddr
+	flags interval
+	elements = { 0.0.0.0/8, 10.0.0.0/8,
+		     100.64.0.0/10, 127.0.0.0/8,
+		     169.254.0.0/16, 172.16.0.0/12,
+		     192.0.0.0/24, 192.0.2.0/24,
+		     192.88.99.0/24, 192.168.0.0/16,
+		     198.18.0.0/15, 198.51.100.0/24,
+		     203.0.113.0/24, 224.0.0.0/4,
+		     240.0.0.0/4 }
+}
+
+chain proxy_prerouting {
+	type filter hook prerouting priority mangle + 1; policy accept;
+	ip daddr @proxy_byp4 return
+	fib daddr type != local meta l4proto { tcp, udp } tproxy ip to 127.0.0.1:12345 meta mark set 0x00000001
+}
