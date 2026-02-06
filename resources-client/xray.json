@@ -1,0 +1,38 @@
+{
+  "log": {
+    "loglevel": "error"
+  },
+  "inbounds": [
+    {
+      "listen": "0.0.0.0",
+      "port": 12345,
+      "protocol": "dokodemo-door",
+      "settings": {
+        "network": "tcp,udp",
+        "followRedirect": true
+      },
+      "streamSettings": {
+        "sockopt": {
+          "tproxy": "tproxy"
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "vless",
+      "settings": {
+        "address": "",
+        "port": null,
+        "id": "",
+        "encryption": "none"
+      },
+      "streamSettings": {
+        "sockopt": {
+          "mark": 2,
+          "tcpMptcp": true
+        }
+      }
+    }
+  ]
+}
