@@ -8,5 +8,4 @@
 [ "$ACTION" = "ifdown" ] || exit
 
 DEVICE=$(ubus call network.interface."$INTERFACE" status | grep -m1 '"device"' | cut -d'"' -f4)
-
 bsbf-mptcp-helper remove "$DEVICE"

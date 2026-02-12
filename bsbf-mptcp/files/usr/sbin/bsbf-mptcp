@@ -11,6 +11,10 @@ SERVER_IP=8.8.8.8
 INTERVAL=1
 WINDOW_SIZE=100
 THRESHOLD_PERCENT=5
+SUBFLOW_LIMIT=8
+
+# Adjust MPTCP subflow limit.
+ip mp limits set subflows "$SUBFLOW_LIMIT"
 
 while true; do
 	sleep "$INTERVAL"
@@ -27,21 +31,46 @@ while true; do
 	# Extract interfaces from default routes.
 	interfaces=$(echo "$routes" | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}')
 
+	awk_output=$(
 	for IFACE in $interfaces; do
+		# If interface is declared backup and its endpoint is nobackup,
+		# set it backup and continue for declared backup interface.
+		ENDPOINTS=$(ip mp e)
+		if uci -q get bsbf-mptcp.main.subflow_backup | grep -q "$IFACE"; then
+			if echo "$ENDPOINTS" | grep -q "dev $IFACE" && \
+			   ! echo "$ENDPOINTS" | grep "dev $IFACE" | grep -q "backup"; then
+				bsbf-mptcp-helper backup "$IFACE"
+			fi
+			continue
+		fi
+
 		# Run fping to get the average RTT of an interface.
 		OUTPUT=$(fping -q -t "$TIMEOUT_MS" -c "$COUNT" -I "$IFACE" "$SERVER_IP" 2>&1)
-		# Make the interface a backup subflow if there's no connectivity and continue.
-		[ "$?" -ne 0 ] && { bsbf-mptcp-helper backup "$IFACE" ; continue; }
+		# Remove the interface if there's no connectivity and continue.
+		[ "$?" -ne 0 ] && { bsbf-mptcp-helper remove "$IFACE" ; continue; }
 
-		# Set isbackup if interface is a backup subflow.
-		ip mp e | grep "dev $IFACE" | grep -q "backup" && isbackup=1
+		# Set isbackup if interface is a backup subflow. Otherwise, add
+		# an mptcp endpoint for the interface if there isn't one for it.
+		# If adding an mptcp endpoint fails, continue the loop so it
+		# won't be fed to awk.
+		isbackup=0
+		if echo "$ENDPOINTS" | grep "dev $IFACE" | grep -q "backup"; then
+			isbackup=1
+		elif ! echo "$ENDPOINTS" | grep -q "dev $IFACE"; then
+			bsbf-mptcp-helper add "$IFACE" || continue
+		fi
 
 		rtt=$(echo "$OUTPUT" | awk -F'/' '{print $8}')
 		echo "$IFACE $rtt $isbackup"
-	done | awk -v w="$WINDOW_SIZE" threshold="$THRESHOLD_PERCENT"'
+	done
+	)
+
+	# Run awk if there are more than 1 interface.
+	[ "$(echo "$awk_output" | wc -l)" -gt 1 ] && \
+	echo "$awk_output" | awk -v w="$WINDOW_SIZE" threshold="$THRESHOLD_PERCENT" '
 	{
 		iface = $1; val = $2; isbackup = $3
-		logfile = "/var/log/bsbf-mptcp-backup.log"
+		logfile = "/var/log/bsbf-mptcp.log"
 
 		backup_str = (isbackup == 1 ? "Yes" : "No")
 		ts = strftime("%Y-%m-%d %H:%M:%S", systime(), 1)
@@ -78,19 +107,19 @@ while true; do
 
 			if (diff >= threshold && isbackup != 1) {
 				print ts, "Triggering backup for", iface >> logfile
-				system("logger -t bsbf-mptcp-backup Triggering backup for " iface)
+				system("logger -t bsbf-mptcp Triggering backup for " iface)
 				system("bsbf-mptcp-helper backup " iface)
 			}
 			if (diff < threshold && isbackup == 1) {
 				print ts, iface, "is now better. Restoring..." >> logfile
-				system("logger -t bsbf-mptcp-backup " iface " is now better. Restoring...")
+				system("logger -t bsbf-mptcp " iface " is now better. Restoring...")
 				system("bsbf-mptcp-helper nobackup " iface)
 			}
 		} else {
 			# This IS the best interface
 			if (isbackup == 1) {
 				print ts, iface, "is now the leader. Restoring..." >> logfile
-				system("logger -t bsbf-mptcp-backup " iface " is now the leader. Restoring...")
+				system("logger -t bsbf-mptcp " iface " is now the leader. Restoring...")
 				system("bsbf-mptcp-helper nobackup " iface)
 			}
 		}

@@ -1,0 +1,55 @@
+#!/bin/sh
+# The remove part of this script removes the mptcp endpoint(s) of a given
+# interface and/or a removed interface. The backup part changes the mptcp
+# endpoint(s) of a given interface to a backup subflow. The add part adds an
+# mptcp endpoint(s) for a given interface.
+# Author: Chester A. Unal <chester.a.unal@arinc9.com>
+
+usage() {
+	echo "usage: $0 backup|nobackup|remove|add <interface>"
+	exit 1
+}
+
+[ $# -ne 2 ] && usage
+
+# Extract MPTCP endpoint ID(s) from interface.
+extract_id() {
+	ID=$(ip mp e | awk -v dev="$1" '$NF == dev {for(i=1;i<=NF;i++) if($i=="id") print $(i+1)}')
+}
+
+case "$1" in
+	add)
+		# Add endpoint if a default route for it exists.
+		ip route show | grep "^default" | grep -q "$2" || exit 1
+		for IP in $(ip -4 -o a s dev "$2" | awk '{print $4}' | cut -d/ -f1); do
+			ip mp e a "$IP" subflow dev "$2"
+		done
+		;;
+	backup|nobackup)
+		extract_id "$2"
+		for ID in $ID; do
+			ip mp e c i "$ID" "$1"
+		done
+		;;
+	remove)
+		extract_id "$2"
+		# Remove endpoint if the ID(s) of the interface is found and exit.
+		if [ -n "$ID" ]; then
+			for ID in $ID; do
+				ip mp e d i "$ID"
+			done
+			exit
+		fi
+
+		# If there, remove endpoint(s) with a removed interface.
+		ID=$(ip mp e | awk '$0 ~ /if/ {for(i=1;i<=NF;i++){if($i=="id"){print $(i+1)}}}')
+		if [ -n "$ID" ]; then
+			for ID in $ID; do
+				ip mp e d i "$ID"
+			done
+		fi
+		;;
+	*)
+		usage
+		;;
+esac
