@@ -3,7 +3,7 @@
 # Author: Chester A. Unal <chester.a.unal@arinc9.com>
 
 if [ $# -ne 1 ]; then
-	echo "Usage: $0 <speed>"
+	echo "Usage: $0 <MBPS>"
 	exit 1
 fi
 
@@ -15,11 +15,11 @@ BASE_INBOUND_MARK=512
 BASE_OUTBOUND_MARK=1024
 
 # Generate a UUID.
-UUID=$(sing-box generate uuid)
+UUID=$(xray uuid)
 
-# Create sing-box configuration for client on server.
+# Create xray configuration for client on server.
 CLIENT_ID=0
-while find /etc/sing-box -maxdepth 1 -type f -name "config-client-$CLIENT_ID-*.json" -print -quit | grep -q .; do
+while find /usr/local/etc/xray -maxdepth 1 -type f -name "config-client-$CLIENT_ID-*.json" -print -quit | grep -q .; do
 	CLIENT_ID=$((CLIENT_ID + 1))
 done
 
@@ -29,49 +29,48 @@ done
 PORT=$((BASE_PORT + CLIENT_ID))
 
 # Add client to server.
-INBOUND_TAG="inbound-$CLIENT_ID"
 INBOUND_MARK=$((BASE_INBOUND_MARK + CLIENT_ID))
-OUTBOUND_TAG="outbound-$CLIENT_ID"
 OUTBOUND_MARK=$((BASE_OUTBOUND_MARK + CLIENT_ID))
 
-sudo tee "/etc/sing-box/config-client-$CLIENT_ID-$SPEED.json" > /dev/null <<EOF
+sudo tee "/usr/local/etc/xray/config-client-$CLIENT_ID-$SPEED.json" > /dev/null <<EOF
 {
   "inbounds": [
     {
-      "type": "vless",
-      "tag": "$INBOUND_TAG",
       "listen": "0.0.0.0",
-      "listen_port": $PORT,
-      "routing_mark": $INBOUND_MARK,
-      "tcp_multi_path": true,
-      "users": [
-        {
-          "uuid": "$UUID"
+      "port": $PORT,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "$UUID"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "sockopt": {
+          "mark": $INBOUND_MARK,
+          "tcpMptcp": true
         }
-      ]
+      }
     }
   ],
   "outbounds": [
     {
-      "type": "direct",
-      "tag": "$OUTBOUND_TAG",
-      "routing_mark": $OUTBOUND_MARK
-    }
-  ],
-  "route": {
-    "rules": [
-      {
-        "inbound": "$INBOUND_TAG",
-        "outbound": "$OUTBOUND_TAG"
+      "protocol": "freedom",
+      "streamSettings": {
+        "sockopt": {
+          "mark": $OUTBOUND_MARK
+        }
       }
-    ]
-  }
+    }
+  ]
 }
 EOF
 
-# Start and enable sing-box for client.
-sudo systemctl start sing-box@config-client-$CLIENT_ID-$SPEED
-sudo systemctl enable --quiet sing-box@config-client-$CLIENT_ID-$SPEED
+# Start and enable xray for client.
+sudo systemctl start xray@config-client-$CLIENT_ID-$SPEED
+sudo systemctl enable --quiet xray@config-client-$CLIENT_ID-$SPEED
 
 # Do rate limiting.
 # Add two classes for HTB, to rate limit download and upload to given limit.

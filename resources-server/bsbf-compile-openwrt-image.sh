@@ -54,25 +54,25 @@ done
 # Update feeds and install all packages.
 ./scripts/feeds update && ./scripts/feeds install -a
 
-# Clone bsbf-client-openwrt-imagebuilder-config-generator.
-git clone https://github.com/bondingshouldbefree/bsbf-client-openwrt-imagebuilder-config-generator
-cd bsbf-client-openwrt-imagebuilder-config-generator
+# Clone bsbf-client-openwrt-config-generator.
+git clone https://github.com/bondingshouldbefree/bsbf-client-openwrt-config-generator
+cd bsbf-client-openwrt-config-generator
 
 # Generate BSBF bonding configuration and install it.
-PACKAGES=$(./bsbf-client-openwrt-imagebuilder-config-generator.sh --server-ipv4 "$server_ipv4" --server-port "$server_port" --uuid "$uuid" $IBCG_ARGS)
+PACKAGES=$(./bsbf-client-openwrt-config-generator.sh --server-ipv4 "$server_ipv4" --server-port "$server_port" --uuid "$uuid" $IBCG_ARGS)
 install -D 99-bsbf-bonding ../files/etc/uci-defaults/99-bsbf-bonding
 
-# Remove bsbf-client-openwrt-imagebuilder-config-generator.
+# Remove bsbf-client-openwrt-config-generator.
 cd ..
-rm -rf bsbf-client-openwrt-imagebuilder-config-generator
+rm -rf bsbf-client-openwrt-config-generator
 
 # Configure the build system.
-## Select device.
+# Select device.
 echo "CONFIG_TARGET_"$target"=y
 CONFIG_TARGET_"$target"_"$subtarget"=y
 CONFIG_TARGET_"$target"_"$subtarget"_DEVICE_"$profile"=y" > .config
 
-## Enable BSBF packages.
+# Enable BSBF packages.
 for pkg in $PACKAGES; do
 	# If package starts with a dash, remove it and disable the package.
 	if [ "${pkg#-}" != "$pkg" ]; then

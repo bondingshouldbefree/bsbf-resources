@@ -16,7 +16,7 @@ BASE_OUTBOUND_MARK=1024
 tc qdisc del dev "$IFACE" root handle 1:0 2>/dev/null ; \
 tc qdisc replace dev "$IFACE" root handle 1:0 htb
 # Set up rate-limiting for existing clients.
-for file in /etc/sing-box/config-client-*.json; do
+for file in /usr/local/etc/xray/config-client-*.json; do
 	[ -e "$file" ] || continue
 	CLIENT_ID=${file##*/config-client-}
 	CLIENT_ID=${CLIENT_ID%%-*}

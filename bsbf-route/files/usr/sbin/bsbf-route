@@ -52,9 +52,9 @@ while true; do
 	[ "$new_m1" -lt 100 ] && continue
 
 	logger -t bsbf-route "Metric value reached 100, resetting"
-	# Set base metric to 10 to prevent interfering with interfaces with
-	# lower metric at bring-up.
-	metric=10
+	# Set base metric to 9 to prevent interfering with interfaces with
+	# metric 1-8 at bring-up.
+	metric=9
 	ip route show | grep "^default" | grep "metric" | while read route; do
 		ip route add ${route%metric*}metric "$metric"
 		ip route delete $route

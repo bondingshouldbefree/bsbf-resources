@@ -1,6 +1,6 @@
 #!/bin/sh
 # This script creates a network with a DHCP client using a newly created network
-# interface. It uses metric values from 7 to 9.
+# interface. It uses metric values from 1 to 8.
 
 # Only run if a network interface from a USB device is being added.
 [ "$ACTION" = "add" ] && echo "$DEVPATH" | grep -q usb || exit
@@ -11,16 +11,16 @@ case "$DEVICENAME" in
 	wwan*|qmimux*) exit ;;
 esac
 
-# Decide on the metric value. Start from 7 and work up to 9.
-metric=7
-while [ $metric -le 9 ]; do
+# Decide on the metric value. Start from 1 and work up to 8.
+metric=1
+while [ $metric -le 8 ]; do
 	# Break if this metric isn't in use.
 	uci show network | grep -q ".metric='$metric'" || break
 
 	# Exit if this metric is in use for the same network interface.
 	[ "$(uci get network.wan_"$DEVICENAME".metric)" = "$metric" ] && exit
 
-	# Add 1 from metric if another network uses this metric.
+	# Add 1 to metric if another network uses this metric.
 	metric=$((metric + 1))
 done
 
