@@ -2,11 +2,16 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2025-2026 Chester A. Unal <chester.a.unal@arinc9.com>
 
+TIMEOUT_MS=1500
+COUNT=2
+INTERVAL=1
+PERIOD_MS=10
+WINDOW_SIZE=100
+LOGFILE="/var/log/bsbf-mptcp.log"
 BSBF_CONFIG_DIR=/usr/local/etc/bsbf
 [ ! -d "$BSBF_CONFIG_DIR" ] && BSBF_CONFIG_DIR=/etc/bsbf
-BSBF_MPTCP_BACKUP="$BSBF_CONFIG_DIR/bsbf-mptcp-subflow-backup"
-INTERVAL=1
-CURL_ARGS="-s -4 --max-time 5 --retry 2 --retry-all-errors --resolve check.mptcp.dev:80:5.196.67.207 check.mptcp.dev"
+. "$BSBF_CONFIG_DIR"/bsbf-bonding.conf
+MAX_TIME=2
 
 # Set subflow limit to 8.
 ip mp limits set subflows 8
@@ -23,154 +28,152 @@ while true; do
 	# Get all default routes with a metric.
 	routes=$(ip route show | grep "^default" | grep "metric")
 
-	# Flush the MPTCP endpoint table and continue if there are no routes.
-	[ -z "$routes" ] && { ip mp e f ; continue; }
-
-	# Some route managers may restore the default route with the original
-	# metric for the same interface, after we change the metric, causing
-	# duplicate routes. In that case, delete the one with the higher metric.
-	duplicates=$(echo "$routes" | awk '{for(i=1;i<=NF;i++) if($i=="dev") d=$(i+1); if (seen[d]++) print}')
-	if [ -n "$duplicates" ]; then
-		echo "$duplicates" | while read route; do
-			ip route delete $route
-		done
-		routes=$(ip route show | grep "^default" | grep "metric")
-	fi
-
-	# Count the number of routes.
-	route_count=$(echo "$routes" | grep -c "metric")
+	# Continue if there are no routes.
+	[ -z "$routes" ] && continue
 
 	# Extract interfaces from default routes.
 	interfaces=$(echo "$routes" | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}')
 
-	# Rid /run/bsbf-mptcp-no-connectivity, /run/bsbf-mptcp-not-supported,
-	# and /run/bsbf-mptcp-supported of interfaces that are not on the
-	# routing table.
-	echo "$interfaces" | grep -xf - /run/bsbf-mptcp-no-connectivity > /run/bsbf-mptcp-no-connectivity.tmp
-	echo "$interfaces" | grep -xf - /run/bsbf-mptcp-not-supported > /run/bsbf-mptcp-not-supported.tmp
-	echo "$interfaces" | grep -xf - /run/bsbf-mptcp-supported > /run/bsbf-mptcp-supported.tmp
-	mv /run/bsbf-mptcp-no-connectivity.tmp /run/bsbf-mptcp-no-connectivity
-	mv /run/bsbf-mptcp-not-supported.tmp /run/bsbf-mptcp-not-supported
-	mv /run/bsbf-mptcp-supported.tmp /run/bsbf-mptcp-supported
-
-	# Rid the MPTCP endpoint table of interfaces that are not on the
-	# supported list.
-	for IFACE in $(ip mp e | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | sort -u); do
-		grep -xq "$IFACE" /run/bsbf-mptcp-supported || bsbf-mptcp-helper remove "$IFACE"
-	done
-
+	list=""
+	data=""
 	for IFACE in $interfaces; do
-		# Check connectivity.
-		if fping -q 5.196.67.207 -b 0 -t 1000 -I "$IFACE"; then
-			# Remove the interface from the no-connectivity list.
-			grep -vx "$IFACE" /run/bsbf-mptcp-no-connectivity > /run/bsbf-mptcp-no-connectivity.tmp
-			mv /run/bsbf-mptcp-no-connectivity.tmp /run/bsbf-mptcp-no-connectivity
-		else
-			# Add the interface to the no-connectivity list.
-			grep -xq "$IFACE" /run/bsbf-mptcp-no-connectivity || echo "$IFACE" >> /run/bsbf-mptcp-no-connectivity
+		# If interface is declared backup and its endpoint is nobackup,
+		# set it backup and continue for declared backup interface.
+		ENDPOINTS=$(ip mp e)
+		if cat "$BSBF_CONFIG_DIR"/bsbf-mptcp-subflow-backup 2>/dev/null | grep -q "$IFACE"; then
+			if echo "$ENDPOINTS" | grep -q "dev $IFACE" && \
+			   ! echo "$ENDPOINTS" | grep "dev $IFACE" | grep -q "backup"; then
+				bsbf-mptcp-helper backup "$IFACE"
+			fi
 			continue
 		fi
 
-		# Continue if the interface is in the not-supported list.
-		grep -xq "$IFACE" /run/bsbf-mptcp-not-supported && continue
+		# Run fping to get the average RTT of an interface.
+		OUTPUT=$(fping -q -s -p "$PERIOD_MS" -t "$TIMEOUT_MS" -c "$COUNT" -I "$IFACE" "$server_ipv4" 2>&1)
+		# Remove the interface if there's no connectivity and continue.
+		[ "$?" -ne 0 ] && { bsbf-mptcp-helper remove "$IFACE" ; continue; }
 
-		# Check MPTCP support on the interface if it's not in the
-		# supported list.
-		if ! grep -xq "$IFACE" /run/bsbf-mptcp-supported; then
-			OUTPUT=$(mptcpize run curl $CURL_ARGS --interface "$IFACE")
-			if [ "$OUTPUT" = "You are using MPTCP." ]; then
-				# Add the interface to the supported list.
-				echo "$IFACE" >> /run/bsbf-mptcp-supported
-				bsbf-mptcp-helper add "$IFACE"
-			else
-				# Add the interface to the not-supported list.
-				echo "$IFACE" >> /run/bsbf-mptcp-not-supported
-			fi
+		# Set isbackup if interface is a backup subflow. Otherwise, add
+		# an mptcp endpoint for the interface if there isn't one for it.
+		isbackup=0
+		if echo "$ENDPOINTS" | grep "dev $IFACE" | grep -q "backup"; then
+			isbackup=1
+		elif ! echo "$ENDPOINTS" | grep -q "dev $IFACE"; then
+			CURL_OUTPUT=$(mptcpize run curl -s -4 -m "$MAX_TIME" check.mptcp.dev --interface "$IFACE")
+			[ "$?" -eq 0 ] && [ "$CURL_OUTPUT" = "You are using MPTCP." ] && bsbf-mptcp-helper add "$IFACE"
 		fi
+
+		list=""$list"LIST $IFACE\n"
+		rtt=$(echo "$OUTPUT" | grep "avg round trip time" | awk '{print $1}')
+		data=""$data"DATA $IFACE $rtt $isbackup\n"
 	done
 
-	# Make the supported interface backup if configured so.
-	while read IFACE; do
-		if grep -xq "$IFACE" "$BSBF_MPTCP_BACKUP"; then
-			bsbf-mptcp-helper backup "$IFACE"
-		else
-			bsbf-mptcp-helper nobackup "$IFACE"
-		fi
-	done < /run/bsbf-mptcp-supported
+	# If there is at least one interface, pipe output to awk.
+	[ -n "$list" ] && printf "%b\n" "$list\nDATASTART\n$data"
+done | awk -v w="$WINDOW_SIZE" -v logfile="$LOGFILE" '
+$1 == "LIST" {
+	# Store the reported interfaces.
+	reported[$2] = 1
+}
+$1 == "DATASTART" {
+	# Remove the interfaces that were not reported from comparable.
+	for (i in comparable) {
+		if (!reported[i])
+			delete comparable[i]
+	}
+	delete reported
 
-	# Get the first interface.
-	i_first=$(echo "$interfaces" | sed -n '1p')
+	# Separate every data group log.
+	print "---" >> logfile
+}
+$1 == "DATA" {
+	iface = $2; rtt = $3; isbackup = $4
+	ts = strftime("%Y-%m-%d %H:%M:%S", systime(), 1)
 
-	# First interface is usable.
-	if ! grep -xq "$i_first" /run/bsbf-mptcp-no-connectivity && grep -xq "$i_first" /run/bsbf-mptcp-supported; then
-		continue
-	# First interface is not-preferred unusable.
-	elif ! grep -xq "$i_first" /run/bsbf-mptcp-no-connectivity && grep -xq "$i_first" /run/bsbf-mptcp-not-supported; then
-		# Find usable interfaces. Remove no-connectivity interfaces from
-		# supported interfaces. If anything is left, we found it.
-		usable=0
-		grep -vxf /run/bsbf-mptcp-no-connectivity /run/bsbf-mptcp-supported 2>/dev/null | grep -q . && usable=1
+	# Set entry position for the interface. Use the window size amount for
+	# the entry size. Entry position starts at 1. The position will be reset
+	# to 1 if the biggest window size entry position is reached.
+	idx[iface] = (idx[iface] % w) + 1
 
-		# Find preferred unusable interfaces. If
-		# /run/bsbf-mptcp-no-connectivity is not empty, we found it.
-		preferred_unusable=0
-		[ -s /run/bsbf-mptcp-no-connectivity ] && preferred_unusable=1
+	# Subtract the historic RTT at the current position from the summation.
+	sum[iface] -= hist[iface, idx[iface]]
 
-		# Continue if none were found.
-		[ "$usable" -eq 0 ] && [ "$preferred_unusable" -eq 0 ] && continue
-	# First interface is preferred unusable.
-	elif grep -xq "$i_first" /run/bsbf-mptcp-no-connectivity; then
-		# Find usable interfaces. Remove no-connectivity interfaces from supported
-		# interfaces. If anything is left, we found it.
-		usable=0
-		grep -vxf /run/bsbf-mptcp-no-connectivity /run/bsbf-mptcp-supported 2>/dev/null | grep -q . && usable=1
+	# Overwrite the historic RTT at the current position with the current
+	# RTT.
+	hist[iface, idx[iface]] = rtt
 
-		# Continue if none were found.
-		[ "$usable" -eq 0 ] && continue
-	fi
+	# Add the current RTT to the summation.
+	sum[iface] += rtt
 
-	# Get the first route.
-	r_first=$(echo "$routes" | sed -n '1p')
+	# If the current amount of entries are less than the window size amount,
+	# increment the entry count by one.
+	if (count[iface] < w)
+		count[iface]++
 
-	# Get the last route.
-	r_last=$(echo "$routes" | tail -n 1)
+	# If the final amount of entries are less than the window size amount,
+	# ensure the interface is nobackup, then conclude processing this line.
+	if (count[iface] < w) {
+		print ts, "Collecting data for", iface ". Current count:", count[iface] >> logfile
+		if (isbackup) {
+			print ts, "Making", iface, "nobackup." >> logfile
+			system("bsbf-mptcp-helper nobackup " iface)
+		}
+		fflush(logfile)
+		next
+	}
 
-	# Extract metric from first route.
-	m_r_first=$(echo "$r_first" | grep -o "metric [0-9]*" | awk '{print $2}')
+	# Calculate the average RTT of all entries of the current interface.
+	avg = sum[iface] / count[iface]
 
-	# Extract metric from last route.
-	m_r_last=$(echo "$r_last" | grep -o "metric [0-9]*" | awk '{print $2}')
+	print ts, iface, "avg:", sprintf("%.2f", avg), "| backup:", isbackup >> logfile
 
-	# Calculate new metric for first route (last route's metric + 1), with a
-	# minimum of 9 to prevent interfering with interfaces with metric 1-8 at
-	# bring-up.
-	new_m_r_first=$((m_r_last + 1))
-	[ "$new_m_r_first" -lt 9 ] && new_m_r_first=9
+	# Declare the interface comparable.
+	comparable[iface] = 1
 
-	# Delete the first route.
-	ip route delete $r_first
+	# If there are less than two comparable interfaces, ensure the interface
+	# is nobackup, then conclude processing this line.
+	if (length(comparable) < 2) {
+		if (isbackup) {
+			print ts, "Making", iface, "nobackup." >> logfile
+			system("bsbf-mptcp-helper nobackup " iface)
+		}
+		fflush(logfile)
+		next
+	}
 
-	if [ "$new_m_r_first" -gt 16 ]; then
-		logger -t bsbf-mptcp "New metric value exceeded 16, resetting all routes."
+	# Iterate over all comparable interfaces to find the best one,
+	# which is the one with the lowest average RTT. Reset best_avg
+	# to 0 so the first comparable interface always becomes the
+	# initial best, then replace it if a lower average is found.
+	best_avg = 0
+	for (i in comparable) {
+		i_avg = sum[i] / count[i]
+		if (best_avg == 0 || i_avg < best_avg) {
+			best_avg = i_avg
+			best_iface = i
+		}
+	}
 
-		# Set base metric to 9 to prevent interfering with interfaces
-		# with metric 1-8 at bring-up.
-		metric=9
+	# Decide if the current interface is in the same RTT group as the best.
+	if (best_avg < 80)
+		same_group = (avg < 80)
+	else if (best_avg < 160)
+		same_group = (avg >= 80 && avg < 160)
+	else if (best_avg < 480)
+		same_group = (avg >= 160 && avg < 480)
+	else
+		same_group = (avg >= 480)
 
-		# Calculate new metric for first route (base metric + route
-		# count - 1).
-		new_m_r_first=$((metric + route_count - 1))
+	print ts, "best:", best_iface, "|", iface, "on same RTT group as best:", same_group >> logfile
 
-		# Update the routes with the new metric. Skip the first route.
-		echo "$routes" | sed '1d' | while read route; do
-			ip route add ${route%metric*}metric "$metric"
-			ip route delete $route
-			metric=$((metric + 1))
-		done
-	fi
+	if (!same_group && !isbackup) {
+		print ts, "Making", iface, "backup." >> logfile
+		system("bsbf-mptcp-helper backup " iface)
+	} else if (same_group && isbackup) {
+		print ts, "Making", iface, "nobackup." >> logfile
+		system("bsbf-mptcp-helper nobackup " iface)
+	}
 
-	# Add what was the first route with the new metric.
-	ip route add ${r_first%metric*}metric "$new_m_r_first"
-
-	logger -t bsbf-mptcp "Changed metric of $i_first from $m_r_first to $new_m_r_first."
-done
+	fflush(logfile)
+}
+'

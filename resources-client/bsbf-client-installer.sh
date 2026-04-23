@@ -36,9 +36,10 @@ done
 
 BSBF_RESOURCES="https://raw.githubusercontent.com/bondingshouldbefree/bsbf-resources/refs/heads/main"
 
-# Install bash, curl, fping, git, jq, lighttpd, mptcpize, and usb-modeswitch.
+# Install bash, curl, ethtool, fping, gawk, git, jq, lighttpd, mptcpize,
+# usb-modeswitch, make, clang, libelf-dev, libc6-dev-i386, and libbpf-dev.
 apt update
-apt install -y bash curl fping git jq lighttpd mptcpize usb-modeswitch
+apt install -y bash curl ethtool fping gawk git jq lighttpd mptcpize usb-modeswitch make clang libelf-dev libc6-dev-i386 libbpf-dev
 
 # Install bsbf-bonding.
 curl -s $BSBF_RESOURCES/resources-client/bsbf-bonding -o /usr/local/sbin/bsbf-bonding
@@ -78,6 +79,28 @@ curl -s $BSBF_RESOURCES/resources-client/xray.json -o /usr/local/etc/xray/bsbf-b
 curl -s $BSBF_RESOURCES/resources-client/99-bsbf-bonding.conf -o /etc/systemd/system/xray@.service.d/99-bsbf-bonding.conf
 mkdir -p /etc/nftables
 curl -s $BSBF_RESOURCES/resources-client/bsbf_bonding.nft -o /etc/nftables/bsbf_bonding.nft
+
+# Install tcp-in-udp.
+git clone https://github.com/multipath-tcp/tcp-in-udp.git
+cd tcp-in-udp && make install && cd .. && rm -rf tcp-in-udp
+
+# Install bsbf-plpmtu.
+curl -s $BSBF_RESOURCES/resources-client/99-bsbf-plpmtu.sh -o /etc/NetworkManager/dispatcher.d/99-bsbf-plpmtu.sh
+chmod +x /etc/NetworkManager/dispatcher.d/99-bsbf-plpmtu.sh
+curl -s $BSBF_RESOURCES/resources-shared/bsbf-plpmtu -o /usr/local/sbin/bsbf-plpmtu
+chmod +x /usr/local/sbin/bsbf-plpmtu
+
+# Install bsbf-tcp-in-udp.
+curl -s $BSBF_RESOURCES/resources-client/99-bsbf-tcp-in-udp.sh -o /etc/NetworkManager/dispatcher.d/99-bsbf-tcp-in-udp.sh
+chmod +x /etc/NetworkManager/dispatcher.d/99-bsbf-tcp-in-udp.sh
+curl -s $BSBF_RESOURCES/resources-client/bsbf-tcp-in-udp -o /usr/local/sbin/bsbf-tcp-in-udp
+chmod +x /usr/local/sbin/bsbf-tcp-in-udp
+
+# Install plp-mtu-discovery.
+git clone https://github.com/bondingshouldbefree/plp-mtu-discovery
+cd plp-mtu-discovery && make install
+install -D systemd/plpmtu-udp-server.service /usr/lib/systemd/system/plpmtu-udp-server.service
+cd .. && rm -rf plp-mtu-discovery
 
 # Reload all unit files in case they have been modified.
 systemctl daemon-reload

@@ -23,10 +23,9 @@ ip link del "$IFB" 2>/dev/null
 ip link add "$IFB" type ifb
 ip link set dev "$IFB" up
 
-# (Re-)add the clsact queuing discipline, and add ingress filter.
-tc qdisc del dev "$INTERFACE" clsact 2>/dev/null
-tc qdisc replace dev "$INTERFACE" clsact
-tc filter add dev "$INTERFACE" ingress protocol ip u32 match u32 0 0 \
+# (Re-)add mirred action with pref 49153 so that it applies after tcp-in-udp.
+tc filter del dev "$INTERFACE" ingress chain 1 pref 49153 2>/dev/null
+tc filter add dev "$INTERFACE" ingress chain 1 pref 49153 protocol ip u32 match u32 0 0 \
 	action mirred egress redirect dev "$IFB"
 
 # (Re-)add the HTB queuing discipline as root. Default to classid 1:1.

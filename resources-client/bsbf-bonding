@@ -40,8 +40,11 @@ case "$1" in
 	ip mp e f
 
 	# Enable and (re)start systemd services.
-	systemctl enable bsbf-mptcp xray@bsbf-bonding lighttpd-bsbf-client-web
-	systemctl restart bsbf-mptcp xray@bsbf-bonding lighttpd-bsbf-client-web
+	systemctl enable bsbf-mptcp plpmtu-udp-server xray@bsbf-bonding lighttpd-bsbf-client-web
+	systemctl restart bsbf-mptcp plpmtu-udp-server xray@bsbf-bonding lighttpd-bsbf-client-web
+
+	# Restart NetworkManager to apply the dispatcher scripts.
+	systemctl restart NetworkManager
 	;;
 --disable)
 	# Disable and stop systemd services.
@@ -78,7 +81,11 @@ case "$1" in
 		/usr/local/sbin/bsbf-rate-limiting \
 		/etc/nftables/bsbf_bonding.nft \
 		/etc/systemd/system/xray@.service.d/99-bsbf-bonding.conf \
-		/usr/local/etc/xray/bsbf-bonding.json
+		/usr/local/etc/xray/bsbf-bonding.json \
+		/etc/NetworkManager/dispatcher.d/99-bsbf-tcp-in-udp.sh \
+		/usr/local/sbin/bsbf-tcp-in-udp \
+		/etc/NetworkManager/dispatcher.d/99-bsbf-plpmtu.sh \
+		/usr/local/sbin/bsbf-plpmtu
 	;;
 *)
 	usage
